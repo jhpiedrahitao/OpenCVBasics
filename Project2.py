@@ -1,113 +1,117 @@
-#Document Scanner
 import cv2
 import numpy as np
+from PIL import Image
+import pytesseract
+from datetime import datetime, date
+import requests
+import json
 
-widthImg=480
-heightImg=640
- 
-def stackImages(scale,imgArray):
-    rows = len(imgArray)
-    cols = len(imgArray[0])
-    rowsAvailable = isinstance(imgArray[0], list)
-    width = imgArray[0][0].shape[1]
-    height = imgArray[0][0].shape[0]
-    if rowsAvailable:
-        for x in range ( 0, rows):
-            for y in range(0, cols):
-                if imgArray[x][y].shape[:2] == imgArray[0][0].shape [:2]:
-                    imgArray[x][y] = cv2.resize(imgArray[x][y], (0, 0), None, scale, scale)
-                else:
-                    imgArray[x][y] = cv2.resize(imgArray[x][y], (imgArray[0][0].shape[1], imgArray[0][0].shape[0]), None, scale, scale)
-                if len(imgArray[x][y].shape) == 2: imgArray[x][y]= cv2.cvtColor( imgArray[x][y], cv2.COLOR_GRAY2BGR)
-        imageBlank = np.zeros((height, width, 3), np.uint8)
-        hor = [imageBlank]*rows
-        hor_con = [imageBlank]*rows
-        for x in range(0, rows):
-            hor[x] = np.hstack(imgArray[x])
-        ver = np.vstack(hor)
-    else:
-        for x in range(0, rows):
-            if imgArray[x].shape[:2] == imgArray[0].shape[:2]:
-                imgArray[x] = cv2.resize(imgArray[x], (0, 0), None, scale, scale)
-            else:
-                imgArray[x] = cv2.resize(imgArray[x], (imgArray[0].shape[1], imgArray[0].shape[0]), None,scale, scale)
-            if len(imgArray[x].shape) == 2: imgArray[x] = cv2.cvtColor(imgArray[x], cv2.COLOR_GRAY2BGR)
-        hor= np.hstack(imgArray)
-        ver = hor
-    return ver
+sensor_db_url = None
 
-def getContours(img):
-    biggest=np.array([])
-    maxArea=0
-    contours,hierarchy=cv2.findContours(img,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
+def post_to_sensor_db(data):
+    date = datetime.now().strftime('%d_%m_%Y')
+    time = datetime.now().strftime('%H:%M:%S')
+    post1 = json.dumps({'date': date, 'time': time,
+                       'type': 'temperature', 'id': '003', 'data': data[0]})
+    post2 = json.dumps({'date': date, 'time': time,
+                       'type': 'humidity', 'id': '003', 'data': data[0]})
+    post3 = json.dumps({'date': date, 'time': time,
+                       'type': 'temperature', 'id': '004', 'data': data[0]})
+    posts = [post1, post2, post3]
+    for post in posts:
+        try:
+            response = requests.post(sensor_db_url, post)
+            print('sensor db response: ' + str(response))
+        except:
+            print('conection no established')
+
+
+def preprocess(img, block_size, gamma):
+    img = cv2.adaptiveThreshold(
+        img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block_size, gamma)
+    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+    return img
+
+
+def getContours(frame):
+    biggest = np.array([])
+    maxArea = 0
+    frameCanny = cv2.Canny(frame, 45, 55)
+    frameCanny = cv2.dilate(frameCanny, kernel, iterations=3)
+    frameCanny = cv2.erode(frameCanny, kernel, iterations=2)
+    contours, hierarchy = cv2.findContours(
+        frameCanny, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     for cnt in contours:
-        area=cv2.contourArea(cnt)
-        if area>=5000:
-            peri=cv2.arcLength(cnt,True)
-            approx=cv2.approxPolyDP(cnt,0.02*peri,True)
-            if area > maxArea and len(approx)==4:
-                biggest=approx
-                maxArea=area
-    cv2.drawContours(imgCount,biggest,-1,(255,0,0),20)
+        area = cv2.contourArea(cnt)
+        if area >= 7000 and area < 80000:
+            peri = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.05*peri, True)
+            if area > maxArea and len(approx) == 4:
+                biggest = approx
+                maxArea = area
     return biggest
 
+
 def reorder(myPoints):
-    myPoints=myPoints.reshape((4,2))
-    newPoints=np.zeros((4,1,2),np.int32)
-    add=myPoints.sum(1)
-    diff=np.diff(myPoints,axis=1)
-    newPoints[0]=myPoints[np.argmin(add)]
-    newPoints[3]=myPoints[np.argmax(add)]
-    newPoints[1]=myPoints[np.argmin(diff)]
-    newPoints[2]=myPoints[np.argmax(diff)]
+    myPoints = myPoints.reshape((4, 2))
+    newPoints = np.zeros((4, 1, 2), np.int32)
+    add = myPoints.sum(1)
+    diff = np.diff(myPoints, axis=1)
+    newPoints[0] = myPoints[np.argmin(add)]
+    newPoints[3] = myPoints[np.argmax(add)]
+    newPoints[1] = myPoints[np.argmin(diff)]
+    newPoints[2] = myPoints[np.argmax(diff)]
     return newPoints
 
-def getWarp(img, biggest):
-    biggest=reorder(biggest)
-    imgOut=np.array([])
-    pts1=np.float32(biggest)
-    pts2=np.float32([[0,0],[widthImg,0],[0,heightImg],[widthImg,heightImg]])
-    matrix=cv2.getPerspectiveTransform(pts1,pts2)
-    imgOut=cv2.warpPerspective(img,matrix,(widthImg,heightImg))
-    imgCropped=imgOut[30:imgOut.shape[0]-20,20:imgOut.shape[1]-20]
-    imgCropped=cv2.resize(imgCropped,(widthImg,heightImg))
-    return imgCropped
 
-def preProcesing(img):
-    imgGray=cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    imgblur=cv2.GaussianBlur(imgGray,(5,5),1)
-    imgCanny=cv2.Canny(imgblur,100,200)
-    kernel=np.ones((5,5))
-    imgDial=cv2.dilate(imgCanny,kernel,iterations=2)
-    imgThres=cv2.erode(imgDial,kernel,iterations=1)
-    return imgThres
+def getWarp(img, ptsSqu):
+    ptsSqu = reorder(ptsSqu)
+    imgOut = np.array([])
+    pts1 = np.float32(ptsSqu)
+    pts2 = np.float32([[0, 0], [300, 0], [0, 300], [300, 300]])
+    matrix = cv2.getPerspectiveTransform(pts1, pts2)
+    imgOut = cv2.warpPerspective(img, matrix, (300, 300))
+    return imgOut
 
-cap=cv2.VideoCapture(0)
-cap.set(3,widthImg) #size
-cap.set(4,heightImg) #size
-cap.set(10,150) #brighthness
-print(cap.isOpened())
 
-final=np.ones((widthImg,heightImg))
-while(True):
-    success, img = cap.read()
-    cv2.resize(img,(widthImg,heightImg))
-    imgCount = img.copy()
-    
-    imgThres=preProcesing(img)
-    biggest = getContours(imgThres)
-    if biggest.size!=0:
-        imgWarped = getWarp(img,biggest)
-        imgWarpedGray=cv2.cvtColor(imgWarped,cv2.COLOR_BGR2GRAY)
-        final=cv2.adaptiveThreshold(imgWarpedGray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,3)
-        imgArray=([img,imgThres,imgCount],
-               [imgWarped,imgWarpedGray,final])
-    else:
-        imgArray=([img,imgThres,img],
-                  [img,img,img])
-    stackedImages=stackImages(0.6,imgArray)
+#kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+kernel = np.ones((3, 3))
 
-    cv2.imshow("Video",stackedImages)
-    cv2.imshow("Result",final)
-    if (cv2.waitKey(1)  & 0xFF == ord('q')):
+cap = cv2.VideoCapture('/dev/webcam_port')
+digitsPos = [[[0, 64], [0, 92]], [[64, 128], [0, 92]], [[128, 192], [0, 92]], [
+    [0, 64], [92, 184]], [[64, 128], [92, 184]], [[128, 192], [92, 184]], [[], []], [[], []]]
+
+while True:
+    displayDetected = False
+    while not displayDetected:
+        ret, frame = cap.read()
+        frame = cv2.GaussianBlur(frame, (3, 3), 3)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(6, 6))
+        #frame = clahe.apply(frame)
+        ptsSqr = getContours(frame)
+        if ptsSqr.size != 0:
+            displayDetected = True
+            frame = getWarp(frame, ptsSqr)[5:-5, 80:-25]
+    frame = preprocess(frame, 43, 7)
+    digits = []
+    for pos in digitsPos:
+        digits.append(frame[pos[1][0]:pos[1][1], pos[0][0]:pos[0][1]])
+
+    #data = pytesseract.image_to_string(frame, config="--psm 6 digits")
+    #print(f'Data: {data}')
+
+    data = [10, 10, 10]
+    #post_to_sensor_db(data)
+
+    #imgStack = np.vstack((imgTIn, imgTOut, imgHIn))
+    #cv2.imshow("outImage", imgStack)
+    cv2.imshow('frame', frame)
+
+    if (cv2.waitKey(1) & 0xFF == ord('q')):
         break
+
+cv2.waitKey(0)
+cap.release()
+cv2.destroyAllWindows()

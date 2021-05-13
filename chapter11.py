@@ -6,7 +6,7 @@ cap = cv2.VideoCapture(0)
 print(cap.isOpened())
 
 #tracker = cv2.TrackerMOSSE_create()
-tracker = cv2.TrackerCSRT_create()
+tracker = cv2.TrackerKCF_create()
 success, frame = cap.read()
 bbox=cv2.selectROI("Tracking",frame,False)
 tracker.init(frame,bbox)

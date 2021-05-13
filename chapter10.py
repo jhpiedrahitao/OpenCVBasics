@@ -24,7 +24,7 @@ while True:
         pts2 = np.float32([[0, 0], [width, 0], [0, height], [width, height]])
         matrix = cv2.getPerspectiveTransform(pts1, pts2)
         imgOut = cv2.warpPerspective(img, matrix, (width, height))
-        cv2.imshow("owarped Image", imgOut)
+        cv2.imshow("warped Image", imgOut)
 
     for x in range (0,4):
         cv2.circle(img,(circles[x][0],circles[x][1]),5,(255,0,220),cv2.FILLED)
